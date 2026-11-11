@@ -1,0 +1,10 @@
+表结构迁移(DBA 手动执行,不接自动化流水线)。
+
+连接串来自环境变量 CMDB_MIGRATOR_DATABASE_URL(有 DDL 权限的账号),
+跟应用运行时用的 DML-only 账号是两套凭据,别混用。
+
+    python3 dev.py db-upgrade                  # 升到最新
+    python3 dev.py db-downgrade                # 回退一版
+    alembic -c services/cmdb/alembic.ini revision -m "描述"   # 新建迁移(手写内容)
+
+刻意不用 --autogenerate:表结构以迁移脚本为准,模型只做读写映射。

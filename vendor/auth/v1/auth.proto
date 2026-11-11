@@ -1,0 +1,270 @@
+syntax = "proto3";
+
+package auth.v1;
+
+// 认证服务(对内 gRPC):中心化身份服务——校验凭据、签发 token、管用户/角色/权限,
+// 给其他微服务做集中鉴权(其他服务不读任何密钥,统一调 VerifyToken)。
+service AuthService {
+  // ---- 登录态 ----
+  // 登录前先取一张验证码,captcha_id 随登录一起回传。
+  rpc GetCaptcha(GetCaptchaRequest) returns (GetCaptchaResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  // 其他微服务/网关拿到 token 后调这个做集中鉴权,不在本地验证。
+  rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse);
+
+  // ---- 账户管理 ----
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+  rpc SetUserActive(SetUserActiveRequest) returns (SetUserActiveResponse);
+  rpc KickUser(KickUserRequest) returns (KickUserResponse);   // ← 新增:管理员强制下线
+
+  // ---- 角色管理 ----
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+  rpc CreateRole(CreateRoleRequest) returns (CreateRoleResponse);
+  rpc UpdateRole(UpdateRoleRequest) returns (UpdateRoleResponse);
+  rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+  // 单独一个方法:权限树体积大,跟改名改描述的频率完全不同
+  rpc UpdateRolePerms(UpdateRolePermsRequest) returns (UpdateRolePermsResponse);
+  // 单独一个方法:主机分类数据权限跟权限树是两回事,分开存分开改
+  rpc UpdateRoleHostCategories(UpdateRoleHostCategoriesRequest) returns (UpdateRoleHostCategoriesResponse);
+
+  // ---- 个人中心 ----
+  rpc GetSelf(GetSelfRequest) returns (GetSelfResponse);
+  rpc UpdateSelf(UpdateSelfRequest) returns (UpdateSelfResponse);
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+
+  // ---- 登录日志 ----
+  rpc ListLoginHistory(ListLoginHistoryRequest) returns (ListLoginHistoryResponse);
+}
+
+// ---------- 通用 ----------
+
+message Pagination {
+  int32 page = 1;
+  int32 page_size = 2;
+  // 用 int32 而不是 int64:JSON 规范要求 int64 序列化成字符串(防 JS 精度丢失),
+  // 前端拿到 "2" 还要 Number() 一次。分页总数到不了 21 亿。
+  int32 total = 3;
+}
+
+message UserInfo {
+  string id = 1;
+  string username = 2;
+  string nickname = 3;
+  string email = 4;
+  bool is_active = 5;
+  bool is_supper = 6;
+  string last_login = 7;
+  string last_ip = 8;
+  string created_at = 9;
+  repeated string role_ids = 10;
+}
+
+message RoleInfo {
+  string id = 1;
+  string name = 2;
+  string desc = 3;
+  // 权限树 JSON:{"模块": {"页面": ["动作", ...]}}。proto 不建模嵌套结构,
+  // 因为权限树是前端定义的、会随业务频繁变化,建进 proto 每次改都要重新生成 stub。
+  string page_perms = 4;
+  string created_at = 5;
+  int32 used = 6;          // 有多少个未删除用户在用这个角色
+  bool host_category_all = 7;          // true=可管理全部主机分类(含未来新增)
+  repeated string host_categories = 8; // 具体可管理的分类ID,含哨兵 "none"=未分类;all 为 true 时忽略
+
+}
+
+// buf lint 要求每个 RPC 有独立的响应类型:共用的话给某个接口加字段会波及其他接口。
+// 字段名统一,所以网关侧可以写一个通用的转换函数。
+message CreateUserResponse { UserInfo user = 1; }
+message UpdateUserResponse { UserInfo user = 1; }
+message DeleteUserResponse {}
+message ResetPasswordResponse {}
+message SetUserActiveResponse {}
+message KickUserRequest { string id = 1; }
+message KickUserResponse { int32 killed = 1; }   // 踢掉的会话数
+
+
+message CreateRoleResponse { RoleInfo role = 1; }
+message UpdateRoleResponse { RoleInfo role = 1; }
+message DeleteRoleResponse {}
+message UpdateRolePermsResponse { RoleInfo role = 1; }
+
+message GetSelfResponse { UserInfo user = 1; }
+message UpdateSelfResponse { UserInfo user = 1; }
+message ChangePasswordResponse {}
+
+// ---------- 登录态 ----------
+
+message GetCaptchaRequest {
+  string client_ip = 1;   // 领码时的客户端 IP,登录时比对,防止跨客户端复用
+}
+
+message GetCaptchaResponse {
+  string captcha_id = 1;
+  string image = 2;        // data:image/svg+xml;base64,... 直接塞进 <img src>
+  int64 expires_in = 3;    // 有效期,秒
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+  string client_ip = 3;
+  string user_agent = 4;
+  string captcha_id = 5;
+  string captcha_code = 6;
+}
+
+message LoginResponse {
+  string access_token = 1;
+  int64 expires_in = 2;    // 有效期,秒
+  UserInfo user = 3;
+}
+
+message LogoutRequest { string token = 1; }
+message LogoutResponse {}
+
+message VerifyTokenRequest {
+  string token = 1;
+  string client_ip = 2;
+  string user_agent = 3;
+}
+
+message VerifyTokenResponse {
+  string user_id = 1;
+  string username = 2;
+  string nickname = 3;
+  repeated string roles = 4;
+  // 扁平权限码 "模块.页面.动作";is_supper 为 true 时这里为空但应视为拥有全部权限
+  repeated string perms = 5;
+  bool is_supper = 6;
+  bool host_category_all = 7;          // 可管理全部主机分类
+  repeated string allowed_categories = 8; // 可管理的分类ID并集,含哨兵 none
+
+}
+
+// ---------- 账户管理 ----------
+
+message ListUsersRequest {
+  string keyword = 1;      // 同时匹配登录名和姓名
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListUsersResponse {
+  repeated UserInfo users = 1;
+  Pagination pagination = 2;
+  repeated string online_ids = 3;   // 当前在线(还有活跃 session)的用户 ID
+}
+
+message GetUserRequest { string id = 1; }
+message GetUserResponse { UserInfo user = 1; }
+
+message CreateUserRequest {
+  string username = 1;
+  string password = 2;
+  string nickname = 3;
+  string email = 4;
+  bool is_supper = 5;
+  repeated string role_ids = 6;
+  string operator_id = 7;  // 操作人,用于 created_by
+}
+
+message UpdateUserRequest {
+  string id = 1;
+  string nickname = 2;
+  string email = 3;
+  bool is_supper = 4;
+  repeated string role_ids = 5;
+}
+
+message DeleteUserRequest {
+  string id = 1;
+  string operator_id = 2;  // 不能删自己,由服务端校验
+}
+
+message ResetPasswordRequest {
+  string id = 1;
+  string password = 2;
+}
+
+message SetUserActiveRequest {
+  string id = 1;
+  bool is_active = 2;
+  string operator_id = 3;  // 不能停用自己
+}
+
+// ---------- 角色管理 ----------
+
+message ListRolesRequest {}
+message ListRolesResponse { repeated RoleInfo roles = 1; }
+
+message CreateRoleRequest {
+  string name = 1;
+  string desc = 2;
+  string operator_id = 3;
+}
+
+message UpdateRoleRequest {
+  string id = 1;
+  string name = 2;
+  string desc = 3;
+}
+
+message DeleteRoleRequest { string id = 1; }
+
+message UpdateRolePermsRequest {
+  string id = 1;
+  string page_perms = 2;   // 权限树 JSON
+}
+
+// ---------- 个人中心 ----------
+
+message GetSelfRequest { string user_id = 1; }
+
+message UpdateSelfRequest {
+  string user_id = 1;
+  string nickname = 2;
+  string email = 3;
+}
+
+message ChangePasswordRequest {
+  string user_id = 1;
+  string old_password = 2;
+  string new_password = 3;
+}
+
+// ---------- 登录日志 ----------
+
+message ListLoginHistoryRequest {
+  string username = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message LoginHistoryItem {
+  string id = 1;
+  string username = 2;
+  string ip = 3;
+  string user_agent = 4;
+  string message = 5;
+  bool is_success = 6;
+  string created_at = 7;
+}
+
+message ListLoginHistoryResponse {
+  repeated LoginHistoryItem items = 1;
+  Pagination pagination = 2;
+}
+
+message UpdateRoleHostCategoriesRequest {
+  string id = 1;
+  bool host_category_all = 2;
+  repeated string category_ids = 3;   // host_category_all 为 true 时可忽略
+}
+message UpdateRoleHostCategoriesResponse { RoleInfo role = 1; }

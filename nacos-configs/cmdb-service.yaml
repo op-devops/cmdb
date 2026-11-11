@@ -1,0 +1,40 @@
+# data-id: cmdb-service.yaml  group: DEFAULT_GROUP  格式: YAML
+
+grpc:
+  host: 0.0.0.0
+  port: 0          # 0 = 随机端口,注册到 Nacos 的是实际绑定端口
+  max_workers: 10
+
+service:
+  name: cmdb-service
+  # 初始权重,之后可在 Nacos 控制台在线调整(调用方刷新实例列表时生效)
+  weight: 1.0
+  # 留空则自动探测本机对外 IP;跨网段/多网卡时在这写死
+  ip: ""
+
+log:
+  level: INFO
+
+db:
+  # 应用只用 cmdb_app 这个账号(只有 DML 权限,由 python3 dev.py db-init 在共享库上创建);
+  # 建表/改表由 DBA 用超级账号手动跑 alembic(python3 dev.py db-upgrade)。
+  # mysql 是 docker 网络里的服务名,只有容器内解析得了。
+  # 如果要在 IDE / 宿主机上直接跑服务进程,这里得换成宿主机能连的地址,
+  # 否则启动没事、一来请求就抛异常 -> gRPC UNKNOWN -> 网关 502。
+  # 想两边都能用,填本机 LAN IP + 共享栈发布到宿主机的端口。
+  dsn: mysql+pymysql://cmdb_app:cmdb_app@mysql:3306/cmdb
+  pool_size: 5
+  max_overflow: 10
+
+redis:
+  # 同 db:docker 服务名只有容器内可用,宿主机进程要换成 LAN IP + 发布端口
+  host: redis
+  port: 6379
+  password: redis
+  # 共享 Redis 上各项目靠 db 编号隔离,别几个项目挤同一个号
+  db: 0
+
+captcha:
+  enabled: true        # 关掉可以让自动化测试跳过验证码
+  length: 4
+  expire_seconds: 120

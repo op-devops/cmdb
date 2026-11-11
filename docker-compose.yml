@@ -1,0 +1,86 @@
+# 只包含本项目的容器。Nacos / 数据库 / Redis 是全局共享的中间件,不在这里定义,
+# 通过外部网络 devops-net 用服务名互访(nacos:8848 / mysql:3306 / redis:6379)。
+#
+# 先把共享中间件栈拉起来(它会创建 devops-net 网络),再 python3 dev.py up。
+# 内部服务横向扩容: docker compose up -d --scale cmdb=3
+x-app: &app
+  build: .
+  image: cmdb-app:latest
+  environment:
+    # NACOS_SERVER 写死 nacos:8848:容器在共享网络里一律按服务名访问,
+    # 这是网络事实不是环境选择,不该让它随 env 文件变。
+    - NACOS_SERVER=nacos:8848
+    # 命名空间默认 prod —— 约定是"起容器就是生产"。
+    # 要加 staging 之类的环境:docker compose --env-file .env.staging up -d
+    #
+    # compose 会自动读 .env 做变量替换。${VAR:-默认值} 对空串也取默认值,
+    # 所以即使本机调试把 .env 的 NACOS_NAMESPACE 清空(走 public),容器也不会被拽过去。
+    - NACOS_NAMESPACE=${NACOS_NAMESPACE:-prod}
+    - NACOS_GROUP=${NACOS_GROUP:-DEFAULT_GROUP}
+    - NACOS_USERNAME=${NACOS_USERNAME:-nacos}
+    - NACOS_PASSWORD=${NACOS_PASSWORD:-nacos}
+
+services:
+  # 一次性任务:把 nacos-configs/*.yaml 导入配置中心后退出
+  config-init:
+    <<: *app
+    command: python scripts/import_configs.py
+
+  # 对内 gRPC 服务:随机端口 + 容器 IP 注册到 Nacos,不对外暴露端口
+  # compose 服务名固定叫 service,不用 cmdb:
+  # 容器名是 <项目目录名>-<compose服务名>-<序号>,项目目录跟服务同名时
+  # (比如 auth 项目的 auth 服务)会重复成 auth-auth-1。
+  # 叫 service 之后是 <项目名>-service-1,跟注册到 Nacos 的 cmdb-service 对得上。
+  service:
+    <<: *app
+    command: python -m services.cmdb.server
+    restart: unless-stopped
+    networks:
+      default:
+        # 共享网络上各项目都会留下 `cmdb` 这个别名,加前缀避免撞车
+        aliases:
+          - cmdb-cmdb
+    deploy:
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "python", "scripts/grpc_healthcheck.py"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+
+  # 对外 HTTP 入口:唯一发布端口的业务容器
+  gateway:
+    <<: *app
+    # 监听地址/端口/信任代理网段全部来自 Nacos(cmdb-gateway.yaml),不在这里写死
+    command: python -m gateway.main
+    restart: unless-stopped
+    networks:
+      default:
+        # APISIX 等共享组件按这个名字回连本项目网关(裸 `gateway` 会跟别的项目撞)
+        aliases:
+          - cmdb-gateway
+    # http.port 配成 0(随机端口)时不要发布端口:网关注册到 Nacos,
+    # 由上层网关(APISIX 等)通过服务发现在内部网络访问。
+    # 用固定端口本地直连调试时,把下面两行放开。
+    # ports:
+    #   - "8000:8000"      # 同时把 Nacos 里的 http.port 改成 8000
+    healthcheck:
+      # 端口可能是随机的,从 gateway.main 写的端口文件里读
+      test: ["CMD", "python", "scripts/gateway_healthcheck.py"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+
+# 加入全局中间件栈所在的网络。网络不存在就先去 infra 目录 docker compose up -d。
+networks:
+  default:
+    name: devops-net
+    external: true

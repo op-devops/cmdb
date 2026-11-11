@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+*.egg-info/
+.pytest_cache/
+
+# buf / grpc_tools 生成的 stub:构建期重新生成,不进版本库
+gen/*
+!gen/.gitkeep
+
+# 本地容器数据
+nacos-data/

@@ -1,0 +1,46 @@
+# data-id: cmdb-gateway.yaml  group: DEFAULT_GROUP  格式: YAML
+# 加项目前缀:共享 Nacos 上多个项目都叫 gateway.yaml 会互相覆盖。
+# 网关运行配置,除注明外全部支持热更新。
+# http.* 只在网关进程启动时读一次,改了要重启网关。
+
+http:
+  host: 0.0.0.0
+  # 0 = 随机端口。网关注册到 Nacos 后由上层网关(APISIX 等)服务发现找它,地址不必固定。
+  # 要本地直连调试就填固定端口(比如 8000);不填固定端口时,实际端口写在 /tmp/gateway.port。
+  port: 0
+  # 信任哪些来源转发过来的 X-Forwarded-For / X-Real-IP,填上层网关所在的网段。
+  # 不配 -> uvicorn 只信 127.0.0.1 -> 经代理的请求拿到的是代理的 IP,
+  # 限速、session 绑 IP、访问日志全部失真。
+  # 别填 "*":那会取 X-Forwarded-For 最左边那个,完全由客户端控制,可伪造。
+  # 只在启动时读一次,改了要重启网关。
+  # 必须跟 auth-gateway.yaml 配成一样:登录校验时 auth 会比对 token 签发时的客户端 IP,
+  # 两边看到的 IP 不一致,每个请求都会被判成"禁止冒用token"。
+  forwarded_allow_ips: "10.100.2.0/24"
+  # 同步接口(def)在 FastAPI 里跑在 anyio 线程池里,这个是线程池容量上限。
+  # 只在进程启动时读取一次(anyio 的 limiter 绑定 event loop,运行中改不安全),改了要重启网关生效。
+  thread_pool_size: 40
+
+# 注册到 Nacos 的身份,上层网关按 service.name 做服务发现
+service:
+  name: cmdb-gateway
+  weight: 1.0
+  # 留空则自动探测本机对外 IP;跨网段/多网卡时在这写死
+  ip: ""
+
+upstreams:
+  cmdb_service: cmdb-service   # Nacos 中的服务名
+  # 登录校验:调 auth-service 的 VerifyToken,带的是 auth 项目的令牌
+  auth_service: auth-service
+
+grpc:
+  timeout_seconds: 3
+
+# 限速计数器用。docker 服务名只有容器内可解析,宿主机进程要换成 LAN IP + 发布端口。
+redis:
+  host: redis
+  port: 6379
+  password: redis
+  db: 0
+
+log:
+  level: INFO

@@ -1,0 +1,199 @@
+syntax = "proto3";
+
+package cmdb.v1;
+
+// cmdb-service 的对内 gRPC 契约。这是唯一真相源:
+// 改这里 + 改调用方,一个 commit 搞定,再 python3 dev.py proto 重新生成 stub。
+//
+// 权限不在这层校验:网关按用户权限码拦截后才会调进来。
+// 写操作带 operator_id,只用来记录"谁干的"。
+service CmdbService {
+  rpc Ping(PingRequest) returns (PingResponse);
+
+  // ---- 主机 ----
+  rpc ListHosts(ListHostsRequest) returns (ListHostsResponse);
+  rpc GetHost(GetHostRequest) returns (GetHostResponse);
+  rpc CreateHost(CreateHostRequest) returns (CreateHostResponse);
+  rpc UpdateHost(UpdateHostRequest) returns (UpdateHostResponse);
+  rpc DeleteHost(DeleteHostRequest) returns (DeleteHostResponse);
+
+  // ---- 主机分类 ----
+  rpc ListCategories(ListCategoriesRequest) returns (ListCategoriesResponse);
+  rpc CreateCategory(CreateCategoryRequest) returns (CreateCategoryResponse);
+  rpc DeleteCategory(DeleteCategoryRequest) returns (DeleteCategoryResponse);
+
+  // 验证主机 SSH 连通性,通过则标记 is_verified=true
+  rpc VerifyHost(VerifyHostRequest) returns (VerifyHostResponse);
+
+  // 取连接某台主机要用的凭据(给 webshell/terminal 服务用,内部令牌保护)
+  rpc GetShellCredential(GetShellCredentialRequest) returns (GetShellCredentialResponse);
+}
+
+message PingRequest {
+  string message = 1;
+}
+
+message PingResponse {
+  string message = 1;
+  // 处理本次请求的实例标识(注册到 Nacos 的 ip:port),用于观察负载均衡
+  string served_by = 2;
+}
+
+message Pagination {
+  int32 page = 1;
+  int32 page_size = 2;
+  // 用 int32 而不是 int64:JSON 规范要求 int64 序列化成字符串,前端还得再转一次
+  int32 total = 3;
+}
+
+// 对外展示的主机信息。
+// 独立密钥 pkey 只进不出:老平台把私钥原样回给前端,这里只告诉调用方"有没有配"。
+message HostInfo {
+  string id = 1;
+  string name = 2;
+  string hostname = 3;
+  int32 port = 4;
+  string username = 5;
+  string desc = 6;
+  bool is_verified = 7;
+  bool has_pkey = 8;
+  string created_at = 9;
+  string created_by = 10;
+  string category_id = 11;   // 所属分类ID,空=未分类
+}
+
+// 主机分类数据权限范围。网关从 auth VerifyToken 取得后透传,cmdb 据此过滤/拦截。
+message DataScope {
+  bool host_category_all = 1;             // true=可管理全部分类(含未来新增),忽略 allowed_categories
+  repeated string allowed_categories = 2; // 可管理的分类ID;含哨兵 "none"=未分类
+}
+
+message ListHostsRequest {
+  // 同时匹配名称、地址、备注
+  string keyword = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+  // 分类筛选:空=全部;字面 "none"=未分类;其余=该分类ID
+  string category_id = 4;
+  DataScope scope = 5;
+}
+
+message ListHostsResponse {
+  repeated HostInfo hosts = 1;
+  Pagination pagination = 2;
+}
+
+message GetHostRequest {
+  string id = 1;
+  DataScope scope = 5;
+}
+
+message GetHostResponse {
+  HostInfo host = 1;
+}
+
+message CreateHostRequest {
+  string name = 1;
+  string hostname = 2;
+  int32 port = 3;
+  string username = 4;
+  // 留空 = 用平台全局密钥
+  string pkey = 5;
+  string desc = 6;
+  string operator_id = 7;
+  string category_id = 8;   // 空=未分类
+  DataScope scope = 9;
+}
+
+message CreateHostResponse {
+  HostInfo host = 1;
+}
+
+message UpdateHostRequest {
+  string id = 1;
+  string name = 2;
+  string hostname = 3;
+  int32 port = 4;
+  string username = 5;
+  // 私钥不回传给前端,编辑表单里拿不到原值,所以要区分三种情况:
+  //   不传      -> 保持原样
+  //   传空串    -> 清掉独立密钥,改用全局密钥
+  //   传非空    -> 替换
+  optional string pkey = 6;
+  string desc = 7;
+  string operator_id = 8;
+  string category_id = 9;   // 空=未分类
+  DataScope scope = 10;
+}
+
+message UpdateHostResponse {
+  HostInfo host = 1;
+}
+
+message DeleteHostRequest {
+  string id = 1;
+  string operator_id = 2;
+  DataScope scope = 3;
+}
+
+message DeleteHostResponse {}
+
+message VerifyHostRequest {
+  string id = 1;
+  // 首次验证用:用它登录后把平台公钥推到主机上,不保存。
+  // 主机已配独立密钥、或已能用全局密钥登录时,留空即可。
+  string password = 2;
+  string operator_id = 3;
+  DataScope scope = 4;
+}
+
+message VerifyHostResponse {
+  bool is_verified = 1;
+  // 验证失败时说明原因(密码错、超时、需要密码等),成功时为空
+  string message = 2;
+}
+
+message GetShellCredentialRequest {
+  string id = 1;
+  DataScope scope = 2;
+}
+
+message GetShellCredentialResponse {
+  string hostname = 1;
+  int32 port = 2;
+  string username = 3;
+  // 该用的私钥:主机独立密钥;没有则平台全局私钥。只在内部传,不回给浏览器
+  string pkey = 4;
+  // 没验证过的主机大概率连不上,给调用方做提示用
+  bool is_verified = 5;
+}
+
+// ---------- 主机分类 ----------
+
+message CategoryInfo {
+  string id = 1;
+  string name = 2;
+  int32 sort = 3;
+  int32 host_count = 4;   // 该分类下主机数,树上显示
+}
+
+message ListCategoriesRequest {}
+
+message ListCategoriesResponse {
+  repeated CategoryInfo categories = 1;
+}
+
+message CreateCategoryRequest {
+  string name = 1;
+  string operator_id = 2;
+}
+message CreateCategoryResponse {
+  CategoryInfo category = 1;
+}
+
+message DeleteCategoryRequest {
+  string id = 1;
+  string operator_id = 2;
+}
+
+message DeleteCategoryResponse {}

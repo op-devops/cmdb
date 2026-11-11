@@ -1,0 +1,54 @@
+# data-id: auth-security.yaml  group: DEFAULT_GROUP  格式: YAML
+# 内部 gRPC 调用的共享令牌。网关和 gRPC 服务都读这一份,轮换时改这里,两边热更新。
+#
+# 轮换步骤(不停机):
+#   1. 生成新令牌  python3 -c "import secrets;print(secrets.token_urlsafe(32))"
+#   2. 改这里并发布,两端会在几秒内各自热更新
+#   3. 期间可能有极短的窗口两端令牌不一致,调用会 401;要零窗口就先把 token 置空
+#      (置空 = 关闭鉴权),等两端都生效后再填新值
+
+grpc:
+  # 免鉴权的方法前缀(前缀匹配)。健康检查不带令牌,拦了容器会一直 unhealthy。
+  # 整项删掉 -> 代码里的兜底值(只放行健康检查);写成 [] -> 一个都不放行。
+  exempt_methods:
+    - /grpc.health.v1.Health/
+    - /grpc.reflection.v1alpha.ServerReflection/   # 用 grpcurl 调试时才需要,不用可删
+
+  # 置空表示不启用鉴权(本地裸跑、单元测试时方便)
+  token: "Z1as7YjnEeA6FDaDLP9CdcITkOH2dJlWILVBdK0HPaA"
+
+  # 调用外部服务时带的令牌。值 = 对方 security 的 grpc.token,抄过来。
+  # cmdb 网关要调 auth-service 的 VerifyToken 做登录校验。
+  upstream_tokens:
+    auth-service: "Z1as7YjnEeA6FDaDLP9CdcITkOH2dJlWILVBdK0HPaA"
+
+ssh:
+  public_key: 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDSNHIR5Ly/ignsBsqEtl/mQRh46YVPjFsXAZfZmblQhuNAGGGodZibRDZ06yK6UhQPMuHdlch8wNvKpSV+PX2jrA6VLW7S+2IA6gLiTiLHPkOya3y7LewJWIyTGIZwxvW0Mhct20zSBMq1F0ieeMGrPaTN4GitFbXOWvGBwfm/nBBr76aquVQT46GHS8YDisTWx19Eb5shIRVOaQDnGVYRwbKg/mL201PHlgJCMBTPrxG2lamrwLX8Lkwq38runCzRTM7Jin1mUcenkBoawyO52yJp04yOeTi/AE7H4LshQ2W5o15QaSRcUSaNZ3S6ANESvmsrdr2wDqr7SGJaUSAz'
+  private_key: |
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIEowIBAAKCAQEA0jRyEeS8v4oJ7AbKhLZf5kEYeOmFT4xbFwGX2Zm5UIbjQBhh
+    qHWYm0Q2dOsiulIUDzLh3ZXIfMDbyqUlfj19o6wOlS1u0vtiAOoC4k4ixz5Dsmt8
+    uy3sCViMkxiGcMb1tDIXLdtM0gTKtRdInnjBqz2kzeBorRW1zlrxgcH5v5wQa++m
+    qrlUE+Ohh0vGA4rE1sdfRG+bISEVTmkA5xlWEcGyoP5i9tNTx5YCQjAUz68RtpWp
+    q8C1/C5MKt/K7pws0UzOyYp9ZlHHp5AaGsMjudsiadOMjnk4vwBOx+C7IUNluaNe
+    UGkkXFEmjWd0ugDREr5rK3a9sA6q+0hiWlEgMwIDAQABAoIBAA8dBjaTI58B5cS6
+    mEUCd9KuS3wmDheyF7qHustCajiH+j7ZgewCyH4hYWj2nwCWdirBlcvAwTF3DFZ9
+    mTyCX04tSL8hDR7ORDWcnah3xbhdmbByWf17R8VEQJcy5DenlnLmRxRc+CEBhzGO
+    AwKh3Arb28WRpPUM4o17rHGP6M0F4iV6M+THL3ttl0S6t4LMle2CmKOHTSyIpAxq
+    Z0L+guFz1T+BjixEbtf1BUBG8aJpTPOuHPCbbOM2czSGe9xNEy/MNl9rInH9vZmr
+    JZ9kUfGBpy+ndCHXrc6MT6Qf0CL9ydRklbn9z9ivUyYQOmtTsqe8Mnb7l57v/8i2
+    00xPgUECgYEA8cdPmkqTeNEqZXFG8fPTdj6OnE4tAhuRnDG8u9N3nstHJFU2jkdj
+    xzlmyLPZQABHgwJlu0HTbvR03zC8vI7s3vADHrWz3YG8V7CaQ+HHDmh0cYu5oRLR
+    VxxNV8cSqMNnvy7+gudSy3MPptlXDjZkj8JIpD0zCjTCSPwkUStGWC8CgYEA3pGz
+    GQkNuFkMicJ2CagM4/7EYUVd8QtUVMM45Etizy6kyTmXRxzSeg/uLmb+fx0Lcw0e
+    8mUgRA/NEfoLkJzq4IWczW9251RGWyJiGXP9UIvhp6tSpr2DZB9TAkeuHKVAOVRm
+    ltDF1wl2wCvXAJ3Kb6I72eHD/ok6MpUqXmDfcz0CgYBkjIYPXYpdCWe/Tk+52bQM
+    jdGTMXPIV5zDv2+FEVnDATjx5DpPC2N0e+vB9gGYe0VCN6IFMUfz8dgU5djn9eyO
+    fnRdtiU6LnUcZsaRCnlVBZ2/huNJGGFU/+EuawzYgINJ4ApaeEdXct+EfQiWUYqa
+    uqqpGwZ57R0La0jTNNMJYwKBgENBi/lYvwiiACPw23J3kc2jwvwR1h1s6wLiK2Lx
+    VN5+ndUgzhHzJ7cy8SqcfPM0d61AncVpwaJPlAyGntAIWwGV3phFwoyM7uXDMhm2
+    7ylT29Cq+MLiKb4rqQ3bU0XcudeZJZcVZ3NfrL7NgJ7zD6VERQnGK0/Tb/6xDKiQ
+    ZXWRAoGBAMPKeA15LBLlv2KzMeUUJD3cODf//fYufPGED+DQFnzV3IDWsCMER8x+
+    fK54qgPQs2HNwNzrsz1gSzgxqj25/GIXUMSCjKxRXJEZwhC2/I1BDLb/P0Uw4ign
+    RNPPKktYNV2BmLi1nH+xt6Tk5nrfe0wpy1zs4H7lLx1xTniig3m/
+    -----END RSA PRIVATE KEY-----
